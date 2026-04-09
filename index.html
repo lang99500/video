@@ -30,13 +30,18 @@ const container = document.getElementById('ar-container');
 const statusEl = document.getElementById('status');
 const hintEl = document.getElementById('hint');
 
-const ROOT_CANDIDATES = ['.', './History'];
+const ROOT_CANDIDATES = ['.', './History', './history', './历史', '..', '../History', '../history', '../历史'];
+const LIB_DIR_CANDIDATES = ['vendor', '供应商'];
+const TARGET_DIR_CANDIDATES = ['targets', '目标'];
+const VIDEO_DIR_CANDIDATES = ['videos', '视频'];
 let activeRoot = '.';
+let activeLibDir = 'vendor';
+let lastTriedLibraryPaths = [];
 
 const CONFIG = {
   baseUrl: '',
   cameraParaUrl: '',
-  videoBaseUrl: '',
+  videoBaseUrls: [],
   markerIds: ['img36', 'img37', 'img38'],
   videoExtensions: ['mp4', 'webm', 'mov']
 };
@@ -91,33 +96,73 @@ async function loadWithFallback(subPath) {
 async function loadLibraryPair() {
   let lastError = null;
   for (const root of ROOT_CANDIDATES) {
-    const threePath = buildPath(root, 'vendor/three.min.js');
-    const arPath = buildPath(root, 'vendor/ar.js');
-    try {
-      await loadScript(threePath);
-      await loadScript(arPath);
-      activeRoot = root;
-      return;
-    } catch (err) {
-      lastError = err;
+    for (const libDir of LIB_DIR_CANDIDATES) {
+      const threePath = buildPath(root, `${libDir}/three.min.js`);
+      const arPath = buildPath(root, `${libDir}/ar.js`);
+      lastTriedLibraryPaths.push(`${threePath} | ${arPath}`);
+      try {
+        await loadScript(threePath);
+        await loadScript(arPath);
+        activeRoot = root;
+        activeLibDir = libDir;
+        return;
+      } catch (err) {
+        lastError = err;
+      }
     }
   }
   throw lastError || new Error('无法加载 AR 基础库');
 }
 
+async function urlExists(url) {
+  try {
+    const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function detectTargetBaseUrl() {
+  const markerId = CONFIG.markerIds[0];
+  for (const root of ROOT_CANDIDATES) {
+    for (const targetDir of TARGET_DIR_CANDIDATES) {
+      const probe = buildPath(root, `${targetDir}/${markerId}.iset`);
+      if (await urlExists(probe)) {
+        return buildPath(root, targetDir);
+      }
+    }
+  }
+  return buildPath(activeRoot, TARGET_DIR_CANDIDATES[0]);
+}
+
+function buildVideoBaseUrls() {
+  const urls = [];
+  for (const root of ROOT_CANDIDATES) {
+    for (const videoDir of VIDEO_DIR_CANDIDATES) {
+      urls.push(buildPath(root, videoDir));
+    }
+  }
+  return urls;
+}
+
 async function bootstrap() {
   try {
     statusEl.textContent = '加载基础库...';
+    lastTriedLibraryPaths = [];
     await loadLibraryPair();
 
-    CONFIG.baseUrl = buildPath(activeRoot, 'targets');
-    CONFIG.cameraParaUrl = buildPath(activeRoot, 'vendor/camera_para.dat');
-    CONFIG.videoBaseUrl = buildPath(activeRoot, 'videos');
+    CONFIG.baseUrl = await detectTargetBaseUrl();
+    CONFIG.cameraParaUrl = buildPath(activeRoot, `${activeLibDir}/camera_para.dat`);
+    CONFIG.videoBaseUrls = buildVideoBaseUrls();
 
     await initAR();
   } catch (err) {
     statusEl.style.background = 'rgba(255,59,48,0.8)';
     statusEl.textContent = `错误: ${err.message}`;
+    if (lastTriedLibraryPaths.length > 0) {
+      console.error('已尝试库路径:', lastTriedLibraryPaths);
+    }
     console.error('启动失败:', err);
   }
 }
@@ -125,10 +170,10 @@ async function bootstrap() {
 async function initAR() {
   try {
     if (typeof THREE === 'undefined') {
-      throw new Error('THREE加载失败，请检查 vendor/three.min.js');
+      throw new Error('THREE加载失败，请检查 vendor 目录是否随页面一起发布');
     }
     if (typeof THREEx === 'undefined') {
-      throw new Error('AR.js加载失败，请检查 vendor/ar.js');
+      throw new Error('AR.js加载失败，请检查 vendor/ar.js 是否存在');
     }
 
     statusEl.textContent = '初始化3D场景...';
@@ -237,13 +282,17 @@ function makeVideoElement(src) {
 }
 
 function resolveVideoPath(markerId) {
-  if (VIDEO_MAP[markerId]) return [`${CONFIG.videoBaseUrl}/${VIDEO_MAP[markerId]}`];
+  if (VIDEO_MAP[markerId]) {
+    return CONFIG.videoBaseUrls.map((base) => `${base}/${VIDEO_MAP[markerId]}`);
+  }
   const markerNum = markerId.replace('img', '');
   const candidates = [];
-  for (const ext of CONFIG.videoExtensions) {
-    candidates.push(`${CONFIG.videoBaseUrl}/${markerId}.${ext}`);
-    candidates.push(`${CONFIG.videoBaseUrl}/video${markerNum}.${ext}`);
-    candidates.push(`${CONFIG.videoBaseUrl}/${markerNum}.${ext}`);
+  for (const base of CONFIG.videoBaseUrls) {
+    for (const ext of CONFIG.videoExtensions) {
+      candidates.push(`${base}/${markerId}.${ext}`);
+      candidates.push(`${base}/video${markerNum}.${ext}`);
+      candidates.push(`${base}/${markerNum}.${ext}`);
+    }
   }
   return candidates;
 }
