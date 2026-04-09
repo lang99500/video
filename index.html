@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>历史AR展示</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #000; overflow: hidden; font-family: "Microsoft YaHei", sans-serif; }
+  #ar-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; }
+  #status {
+    position: fixed; top: 20px; left: 20px; color: #fff;
+    background: rgba(0,0,0,0.7); padding: 10px 15px; border-radius: 8px; font-size: 14px;
+    z-index: 999;
+  }
+  #hint {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    color: #fff; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 25px;
+    z-index: 999;
+  }
+</style>
+</head>
+<body>
+<div id="ar-container"></div>
+<div id="status">初始化中...</div>
+<div id="hint">请扫描 img36~img38 触发对应视频</div>
+
+<!-- 本地库：避免外网CDN -->
+<script src="./vendor/three.min.js"></script>
+<script src="./vendor/ar.js"></script>
+
+<script>
+const container = document.getElementById('ar-container');
+const statusEl = document.getElementById('status');
+const hintEl = document.getElementById('hint');
+
+const CONFIG = {
+  baseUrl: './targets',
+  cameraParaUrl: './vendor/camera_para.dat',
+  videoBaseUrl: './videos',
+  markerIds: ['img36', 'img37', 'img38'],
+  videoExtensions: ['mp4', 'webm', 'mov']
+};
+
+// 扫描映射：
+// img36 -> videos/img1.mp4
+// img37 -> videos/img2.mp4
+// img38 -> videos/img3.mp4
+const VIDEO_MAP = {
+  img36: 'img1.mp4',
+  img37: 'img2.mp4',
+  img38: 'img3.mp4'
+};
+
+let scene, camera, renderer, arContext, arSource;
+let markers = {};
+let activeMarkerId = null;
+
+window.onload = initAR;
+
+async function initAR() {
+  try {
+    if (typeof THREE === 'undefined') {
+      throw new Error('THREE加载失败，请检查 vendor/three.min.js');
+    }
+    if (typeof THREEx === 'undefined') {
+      throw new Error('AR.js加载失败，请检查 vendor/ar.js');
+    }
+
+    statusEl.textContent = '初始化3D场景...';
+    scene = new THREE.Scene();
+    camera = new THREE.Camera();
+    scene.add(camera);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    statusEl.textContent = '加载摄像头...';
+    await initARSource();
+
+    statusEl.textContent = '加载AR引擎...';
+    await initARContext();
+
+    statusEl.textContent = '加载识别标记与视频...';
+    createAllMarkers();
+
+    statusEl.textContent = '准备完成！请扫描 img36~img38';
+    setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
+
+    animate();
+  } catch (err) {
+    statusEl.style.background = 'rgba(255,59,48,0.8)';
+    statusEl.textContent = `错误: ${err.message}`;
+    console.error('AR初始化失败:', err);
+  }
+}
+
+function initARSource() {
+  return new Promise((resolve, reject) => {
+    arSource = new THREEx.ArToolkitSource({
+      sourceType: 'webcam',
+      sourceWidth: window.innerWidth,
+      sourceHeight: window.innerHeight
+    });
+    arSource.init(() => {
+      container.appendChild(arSource.domElement);
+      arSource.domElement.style.zIndex = 0;
+      resolve();
+    }, reject);
+  });
+}
+
+function initARContext() {
+  return new Promise((resolve, reject) => {
+    arContext = new THREEx.ArToolkitContext({
+      cameraParametersUrl: CONFIG.cameraParaUrl,
+      detectionMode: 'mono',
+      maxDetectionRate: 30
+    });
+    arContext.init(() => {
+      camera.projectionMatrix.copy(arContext.getProjectionMatrix());
+      resolve();
+    }, reject);
+  });
+}
+
+function createAllMarkers() {
+  for (const markerId of CONFIG.markerIds) {
+    const markerRoot = new THREE.Group();
+    scene.add(markerRoot);
+
+    new THREEx.ArMarkerControls(arContext, markerRoot, {
+      type: 'nft',
+      descriptorsUrl: `${CONFIG.baseUrl}/${markerId}`
+    });
+
+    const geometry = new THREE.PlaneGeometry(1.6, 0.9);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x111111,
+      transparent: true,
+      opacity: 1,
+      side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.z = 0.1;
+    mesh.visible = false;
+    markerRoot.add(mesh);
+
+    markers[markerId] = {
+      root: markerRoot,
+      mesh: mesh,
+      videoEl: null,
+      videoTexture: null,
+      loading: false
+    };
+  }
+}
+
+function makeVideoElement(src) {
+  const video = document.createElement('video');
+  video.src = src;
+  video.crossOrigin = 'anonymous';
+  video.loop = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.setAttribute('webkit-playsinline', 'true');
+  video.preload = 'auto';
+  video.style.display = 'none';
+  document.body.appendChild(video);
+  return video;
+}
+
+function resolveVideoPath(markerId) {
+  if (VIDEO_MAP[markerId]) return [`${CONFIG.videoBaseUrl}/${VIDEO_MAP[markerId]}`];
+  const markerNum = markerId.replace('img', '');
+  const candidates = [];
+  for (const ext of CONFIG.videoExtensions) {
+    candidates.push(`${CONFIG.videoBaseUrl}/${markerId}.${ext}`);
+    candidates.push(`${CONFIG.videoBaseUrl}/video${markerNum}.${ext}`);
+    candidates.push(`${CONFIG.videoBaseUrl}/${markerNum}.${ext}`);
+  }
+  return candidates;
+}
+
+async function ensureVideoReady(markerId) {
+  const marker = markers[markerId];
+  if (!marker || marker.loading) return false;
+  if (marker.videoEl && marker.videoTexture) return true;
+
+  marker.loading = true;
+  const candidates = resolveVideoPath(markerId);
+  for (const src of candidates) {
+    const video = makeVideoElement(src);
+    const loaded = await new Promise((resolve) => {
+      const onOk = () => { cleanup(); resolve(true); };
+      const onErr = () => { cleanup(); resolve(false); };
+      const cleanup = () => {
+        video.removeEventListener('canplay', onOk);
+        video.removeEventListener('error', onErr);
+      };
+      video.addEventListener('canplay', onOk, { once: true });
+      video.addEventListener('error', onErr, { once: true });
+      video.load();
+    });
+
+    if (loaded) {
+      marker.videoEl = video;
+      marker.videoTexture = new THREE.VideoTexture(video);
+      marker.videoTexture.minFilter = THREE.LinearFilter;
+      marker.videoTexture.magFilter = THREE.LinearFilter;
+      marker.videoTexture.format = THREE.RGBFormat;
+      marker.mesh.material.map = marker.videoTexture;
+      marker.mesh.material.needsUpdate = true;
+      marker.loading = false;
+      return true;
+    }
+
+    video.remove();
+  }
+
+  marker.loading = false;
+  return false;
+}
+
+function stopAllVideos(exceptId = null) {
+  for (const id in markers) {
+    if (id === exceptId) continue;
+    const marker = markers[id];
+    marker.mesh.visible = false;
+    if (marker.videoEl && !marker.videoEl.paused) {
+      marker.videoEl.pause();
+      marker.videoEl.currentTime = 0;
+    }
+  }
+}
+
+async function activateMarker(markerId) {
+  if (activeMarkerId === markerId) return;
+
+  stopAllVideos(markerId);
+  const ok = await ensureVideoReady(markerId);
+  if (!ok) {
+    hintEl.textContent = `未找到 ${markerId} 对应视频`;
+    activeMarkerId = null;
+    return;
+  }
+
+  const marker = markers[markerId];
+  marker.mesh.visible = true;
+  try {
+    await marker.videoEl.play();
+  } catch (err) {
+    console.warn('视频自动播放失败:', err);
+  }
+  activeMarkerId = markerId;
+  hintEl.textContent = `已识别 ${markerId}，正在播放视频`;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (arSource && arSource.ready && arContext) {
+    arContext.update(arSource.domElement);
+  }
+
+  let foundId = null;
+  for (const id in markers) {
+    if (markers[id].root.visible) {
+      foundId = id;
+      break;
+    }
+  }
+
+  if (!foundId) {
+    stopAllVideos();
+    activeMarkerId = null;
+    hintEl.textContent = '请扫描 img36~img38 触发对应视频';
+  } else {
+    activateMarker(foundId);
+  }
+
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  if (!renderer) return;
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  if (arSource) {
+    arSource.onResizeElement();
+    arSource.copyElementSizeTo(renderer.domElement);
+    if (arContext && arContext.arController) {
+      arSource.copyElementSizeTo(arContext.arController.canvas);
+    }
+  }
+});
+</script>
+</body>
+</html>
