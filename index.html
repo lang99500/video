@@ -70,7 +70,8 @@ function buildPath(root, subPath) {
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = src;
+    const ver = '20260410-1';
+    script.src = `${src}${src.includes('?') ? '&' : '?'}v=${ver}`;
     script.async = false;
     script.onload = () => resolve(src);
     script.onerror = () => reject(new Error(`加载失败: ${src}`));
