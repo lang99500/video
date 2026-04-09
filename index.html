@@ -100,12 +100,25 @@ async function loadLibraryPair() {
     for (const libDir of LIB_DIR_CANDIDATES) {
       const threePath = buildPath(root, `${libDir}/three.min.js`);
       const arPath = buildPath(root, `${libDir}/ar.js`);
-      lastTriedLibraryPaths.push(`${threePath} | ${arPath}`);
+      const arThreexPath = buildPath(root, `${libDir}/ar-threex.js`);
+      lastTriedLibraryPaths.push(`${threePath} | ${arPath} | ${arThreexPath}`);
       try {
         await loadScript(threePath);
         await loadScript(arPath);
+        await loadScript(arThreexPath);
         activeRoot = root;
         activeLibDir = libDir;
+
+        // 验活：必须有 three 与 THREEx 三个关键类
+        if (
+          typeof window.THREE === 'undefined' ||
+          typeof window.THREEx === 'undefined' ||
+          typeof window.THREEx.ArToolkitSource === 'undefined' ||
+          typeof window.THREEx.ArToolkitContext === 'undefined' ||
+          typeof window.THREEx.ArMarkerControls === 'undefined'
+        ) {
+          throw new Error(`库已加载但未激活THREEx: ${root}/${libDir}`);
+        }
         return;
       } catch (err) {
         lastError = err;
@@ -153,16 +166,6 @@ async function bootstrap() {
     lastTriedLibraryPaths = [];
     await loadLibraryPair();
 
-    // 兼容不同构建：有的 ar.js 暴露 ARjs.*，有的暴露 THREEx.*
-    if (typeof window.THREEx === 'undefined') {
-      window.THREEx = {};
-    }
-    if (typeof window.ARjs !== 'undefined') {
-      window.THREEx.ArToolkitSource = window.THREEx.ArToolkitSource || window.ARjs.Source;
-      window.THREEx.ArToolkitContext = window.THREEx.ArToolkitContext || window.ARjs.Context;
-      window.THREEx.ArMarkerControls = window.THREEx.ArMarkerControls || window.ARjs.MarkerControls;
-    }
-
     CONFIG.baseUrl = await detectTargetBaseUrl();
     CONFIG.cameraParaUrl = buildPath(activeRoot, `${activeLibDir}/camera_para.dat`);
     CONFIG.videoBaseUrls = buildVideoBaseUrls();
@@ -189,7 +192,7 @@ async function initAR() {
       typeof THREEx.ArToolkitContext === 'undefined' ||
       typeof THREEx.ArMarkerControls === 'undefined'
     ) {
-      throw new Error('AR.js加载失败，请检查 vendor/ar.js 是否为浏览器构建版');
+      throw new Error('AR.js加载失败，请检查 vendor/ar.js 与 vendor/ar-threex.js 是否都存在');
     }
 
     statusEl.textContent = '初始化3D场景...';
