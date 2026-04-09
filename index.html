@@ -153,6 +153,16 @@ async function bootstrap() {
     lastTriedLibraryPaths = [];
     await loadLibraryPair();
 
+    // 兼容不同构建：有的 ar.js 暴露 ARjs.*，有的暴露 THREEx.*
+    if (typeof window.THREEx === 'undefined') {
+      window.THREEx = {};
+    }
+    if (typeof window.ARjs !== 'undefined') {
+      window.THREEx.ArToolkitSource = window.THREEx.ArToolkitSource || window.ARjs.Source;
+      window.THREEx.ArToolkitContext = window.THREEx.ArToolkitContext || window.ARjs.Context;
+      window.THREEx.ArMarkerControls = window.THREEx.ArMarkerControls || window.ARjs.MarkerControls;
+    }
+
     CONFIG.baseUrl = await detectTargetBaseUrl();
     CONFIG.cameraParaUrl = buildPath(activeRoot, `${activeLibDir}/camera_para.dat`);
     CONFIG.videoBaseUrls = buildVideoBaseUrls();
@@ -173,8 +183,13 @@ async function initAR() {
     if (typeof THREE === 'undefined') {
       throw new Error('THREE加载失败，请检查 vendor 目录是否随页面一起发布');
     }
-    if (typeof THREEx === 'undefined') {
-      throw new Error('AR.js加载失败，请检查 vendor/ar.js 是否存在');
+    if (
+      typeof THREEx === 'undefined' ||
+      typeof THREEx.ArToolkitSource === 'undefined' ||
+      typeof THREEx.ArToolkitContext === 'undefined' ||
+      typeof THREEx.ArMarkerControls === 'undefined'
+    ) {
+      throw new Error('AR.js加载失败，请检查 vendor/ar.js 是否为浏览器构建版');
     }
 
     statusEl.textContent = '初始化3D场景...';
