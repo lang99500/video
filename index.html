@@ -51,9 +51,9 @@ const CONFIG = {
 // img37 -> videos/img2.mp4
 // img38 -> videos/img3.mp4
 const VIDEO_MAP = {
-  img36: 'img1.mp4',
-  img37: 'img2.mp4',
-  img38: 'img3.mp4'
+  img36: 'img1',
+  img37: 'img2',
+  img38: 'img3'
 };
 
 let scene, camera, renderer, arContext, arSource;
@@ -302,15 +302,28 @@ function makeVideoElement(src) {
 
 function resolveVideoPath(markerId) {
   if (VIDEO_MAP[markerId]) {
-    return CONFIG.videoBaseUrls.map((base) => `${base}/${VIDEO_MAP[markerId]}`);
+    const mapped = VIDEO_MAP[markerId];
+    const mappedName = mapped.replace(/\.(mp4|webm|mov)$/i, '');
+    const preferred = [];
+    for (const base of CONFIG.videoBaseUrls) {
+      preferred.push(`${base}/${mapped}`);
+      for (const ext of CONFIG.videoExtensions) {
+        preferred.push(`${base}/${mappedName}.${ext}`);
+        preferred.push(`${base}/${mappedName}.${ext.toUpperCase()}`);
+      }
+    }
+    return preferred;
   }
   const markerNum = markerId.replace('img', '');
   const candidates = [];
   for (const base of CONFIG.videoBaseUrls) {
     for (const ext of CONFIG.videoExtensions) {
       candidates.push(`${base}/${markerId}.${ext}`);
+      candidates.push(`${base}/${markerId}.${ext.toUpperCase()}`);
       candidates.push(`${base}/video${markerNum}.${ext}`);
+      candidates.push(`${base}/video${markerNum}.${ext.toUpperCase()}`);
       candidates.push(`${base}/${markerNum}.${ext}`);
+      candidates.push(`${base}/${markerNum}.${ext.toUpperCase()}`);
     }
   }
   return candidates;
@@ -374,7 +387,8 @@ async function activateMarker(markerId) {
   stopAllVideos(markerId);
   const ok = await ensureVideoReady(markerId);
   if (!ok) {
-    hintEl.textContent = `未找到 ${markerId} 对应视频`;
+    const firstTry = resolveVideoPath(markerId)[0] || '';
+    hintEl.textContent = `未找到 ${markerId} 视频，先检查: ${firstTry}`;
     activeMarkerId = null;
     return;
   }
